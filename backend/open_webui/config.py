@@ -1135,6 +1135,7 @@ DEFAULT_MODELS = PersistentConfig(
     "DEFAULT_MODELS", "ui.default_models", os.environ.get("DEFAULT_MODELS", None)
 )
 
+ENABLE_DEFAULT_PROMPT_SUGGESTIONS = os.environ.get("ENABLE_DEFAULT_PROMPT_SUGGESTIONS", "True").lower() == "true"
 try:
     default_prompt_suggestions = json.loads(
         os.environ.get("DEFAULT_PROMPT_SUGGESTIONS", "[]")
@@ -1142,7 +1143,7 @@ try:
 except Exception as e:
     log.exception(f"Error loading DEFAULT_PROMPT_SUGGESTIONS: {e}")
     default_prompt_suggestions = []
-if default_prompt_suggestions == []:
+if ENABLE_DEFAULT_PROMPT_SUGGESTIONS and default_prompt_suggestions == []:
     default_prompt_suggestions = [
         {
             "title": ["Help me study", "vocabulary for a college entrance exam"],
