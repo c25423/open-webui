@@ -20,6 +20,7 @@ on:
 
 jobs:
   build:
+    if: github.repository != 'c25423/open-webui'
     name: 'Format Backend'
     runs-on: ubuntu-latest
 

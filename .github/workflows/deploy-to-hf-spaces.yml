@@ -9,6 +9,7 @@ on:
 
 jobs:
   check-secret:
+    if: github.repository != 'c25423/open-webui'
     runs-on: ubuntu-latest
     outputs:
       token-set: ${{ steps.check-key.outputs.defined }}
@@ -20,9 +21,9 @@ jobs:
         run: echo "defined=true" >> $GITHUB_OUTPUT
 
   deploy:
+    if: github.repository != 'c25423/open-webui' && needs.check-secret.outputs.token-set == 'true'
     runs-on: ubuntu-latest
     needs: [check-secret]
-    if: needs.check-secret.outputs.token-set == 'true'
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
