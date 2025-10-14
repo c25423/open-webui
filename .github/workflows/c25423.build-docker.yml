@@ -1,0 +1,224 @@
+name: (c25423) Build and publish Docker images
+
+on:
+  workflow_dispatch:
+    inputs:
+      input_tag:
+        description: 'Optional: Specify a git tag to checkout. If empty, the latest tag will be used.'
+        required: false
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.get_tag.outputs.tag }}
+      is_latest: ${{ steps.get_tag.outputs.is_latest }}
+      is_valid_semver: ${{ steps.get_semver.outputs.is_valid_semver }}
+      semver: ${{ steps.get_semver.outputs.semver }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Determine tag
+        id: get_tag
+        run: |
+          INPUT_TAG="${{ github.event.inputs.input_tag }}"
+          LATEST_TAG=$(git describe --tags --abbrev=0)
+
+          # Get current tag to use
+          if [[ -n "$INPUT_TAG" ]]; then
+            # Use the user-provided tag
+            CURR_TAG="${INPUT_TAG}"
+            echo "Using user-provided tag: $CURR_TAG"
+          else
+            # Use the latest tag
+            CURR_TAG="${LATEST_TAG}"
+            echo "Using latest tag: $CURR_TAG"
+          fi
+          echo "tag=${CURR_TAG}" >> "$GITHUB_OUTPUT"
+
+          # Determine if it is the latest tag
+          if [[ "$CURR_TAG" == "$LATEST_TAG" ]]; then
+            echo "is_latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_latest=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout tag
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.get_tag.outputs.tag }}
+
+      - name: Determine semver
+        id: get_semver
+        run: |
+          TAG="${{ steps.get_tag.outputs.tag }}"
+          REGEX="^v([0-9]+)\.([0-9]+)\.([0-9]+)-c25423$"
+          if [[ $TAG =~ $REGEX ]]; then
+            echo "is_valid_semver=true" >> "$GITHUB_OUTPUT"
+            SEMVER=${TAG#v}
+            SEMVER=${SEMVER%-*}
+            echo "semver=${SEMVER}" >> "$GITHUB_OUTPUT"
+            echo "Valid semver $SEMVER"
+          else
+            echo "is_valid_semver=false" >> "$GITHUB_OUTPUT"
+            echo "Invalid semver $TAG"
+          fi
+
+
+  build:
+    needs: [prepare]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      # GitHub Packages requires the entire repository name to be in lowercase
+      - name: Set repository and image name to lowercase
+        run: |
+          echo "IMAGE_NAME=${IMAGE_NAME,,}" >>${GITHUB_ENV}
+          echo "FULL_IMAGE_NAME=ghcr.io/${IMAGE_NAME,,}" >>${GITHUB_ENV}
+        env:
+          IMAGE_NAME: '${{ github.repository }}'
+
+      - name: Prepare
+        run: |
+          platform=${{ matrix.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker images
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.FULL_IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=git-
+            type=raw,value=latest,enable=${{ needs.prepare.outputs.is_latest }}
+            type=semver,pattern={{version}},value=${{ needs.prepare.outputs.semver }},enable=${{ needs.prepare.outputs.is_valid_semver }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.prepare.outputs.semver }},enable=${{ needs.prepare.outputs.is_valid_semver }}
+            type=semver,pattern={{major}},value=${{ needs.prepare.outputs.semver }},enable=${{ needs.prepare.outputs.is_valid_semver }}
+
+      - name: Extract metadata for Docker cache
+        id: cache-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.FULL_IMAGE_NAME }}
+          tags: |
+            type=raw,value=cache-${{ matrix.platform }}
+          flavor: |
+            latest=false
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        id: build
+        with:
+          context: .
+          push: true
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.FULL_IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=registry,ref=${{ steps.cache-meta.outputs.tags }}
+          cache-to: type=registry,ref=${{ steps.cache-meta.outputs.tags }},mode=max
+          build-args: |
+            BUILD_HASH=${{ github.sha }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      # GitHub Packages requires the entire repository name to be in lowercase
+      - name: Set repository and image name to lowercase
+        run: |
+          echo "IMAGE_NAME=${IMAGE_NAME,,}" >>${GITHUB_ENV}
+          echo "FULL_IMAGE_NAME=ghcr.io/${IMAGE_NAME,,}" >>${GITHUB_ENV}
+        env:
+          IMAGE_NAME: '${{ github.repository }}'
+
+      - name: Download digests
+        uses: actions/download-artifact@v5
+        with:
+          pattern: digests-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker images
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.FULL_IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=git-
+            type=raw,value=latest,enable=${{ needs.prepare.outputs.is_latest }}
+            type=semver,pattern={{version}},value=${{ needs.prepare.outputs.semver }},enable=${{ needs.prepare.outputs.is_valid_semver }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.prepare.outputs.semver }},enable=${{ needs.prepare.outputs.is_valid_semver }}
+            type=semver,pattern={{major}},value=${{ needs.prepare.outputs.semver }},enable=${{ needs.prepare.outputs.is_valid_semver }}
+
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.FULL_IMAGE_NAME }}@sha256:%s ' *)
+
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect ${{ env.FULL_IMAGE_NAME }}:${{ steps.meta.outputs.version }}
