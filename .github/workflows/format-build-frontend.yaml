@@ -20,6 +20,7 @@ on:
 
 jobs:
   build:
+    if: github.repository != 'c25423/open-webui'
     name: 'Format & Build Frontend'
     runs-on: ubuntu-latest
     steps:
@@ -47,6 +48,7 @@ jobs:
         run: npm run build
 
   test-frontend:
+    if: github.repository != 'c25423/open-webui'
     name: 'Frontend Unit Tests'
     runs-on: ubuntu-latest
     steps:
