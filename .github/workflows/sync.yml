@@ -1,4 +1,4 @@
-name: (c25423) Sync with upstream
+name: sync
 
 on:
   workflow_dispatch:

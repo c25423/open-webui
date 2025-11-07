@@ -1,4 +1,4 @@
-name: (c25423) Build and publish Docker images
+name: docker
 
 on:
   workflow_dispatch:
