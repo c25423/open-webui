@@ -48,9 +48,9 @@ jobs:
 
       - name: Rebase personal branch onto main
         run: |
-          git checkout -B c25423 origin/c25423
+          git checkout -B main-c25423 origin/main-c25423
           git rebase main
-          git push --force-with-lease origin c25423
+          git push --force-with-lease origin main-c25423
 
       - name: Tag c25423 branch
         run: |
