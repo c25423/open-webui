@@ -121,6 +121,13 @@ def openai_reasoning_model_handler(payload):
     return payload
 
 
+def openrouter_request_handler(headers: dict):
+    headers["HTTP-Referer"] = "https://openwebui.com/"
+    headers["X-Title"] = "Open WebUI"
+
+    return headers
+
+
 async def get_headers_and_cookies(
     request: Request,
     url,
@@ -132,14 +139,6 @@ async def get_headers_and_cookies(
     cookies = {}
     headers = {
         "Content-Type": "application/json",
-        **(
-            {
-                "HTTP-Referer": "https://openwebui.com/",
-                "X-Title": "Open WebUI",
-            }
-            if "openrouter.ai" in url
-            else {}
-        ),
         **(
             {
                 "X-OpenWebUI-User-Name": quote(user.name, safe=" "),
@@ -779,6 +778,10 @@ def is_openai_reasoning_model(model: str) -> bool:
     return model.lower().startswith(("o1", "o3", "o4", "gpt-5"))
 
 
+def is_openrouter_request(url: str, model: Optional[str]) -> bool:
+    return "openrouter.ai" in url or (model is not None and model.startswith("openrouter:"))
+
+
 def convert_to_azure_payload(url, payload: dict, api_version: str):
     model = payload.get("model", "")
 
@@ -912,6 +915,9 @@ async def generate_chat_completion(
     headers, cookies = await get_headers_and_cookies(
         request, url, key, api_config, metadata, user=user
     )
+    # Add additional headers for OpenRouter request
+    if is_openrouter_request(url=url, model=form_data.get("model")):
+        headers = openrouter_request_handler(headers=headers)
 
     if api_config.get("azure", False):
         api_version = api_config.get("api_version", "2023-03-15-preview")
@@ -1021,6 +1027,10 @@ async def embeddings(request: Request, form_data: dict, user):
     headers, cookies = await get_headers_and_cookies(
         request, url, key, api_config, user=user
     )
+    # Add additional headers for OpenRouter request
+    if is_openrouter_request(url=url, model=form_data.get("model")):
+        headers = openrouter_request_handler(headers=headers)
+
     try:
         session = aiohttp.ClientSession(trust_env=True)
         r = await session.request(
